@@ -47,9 +47,8 @@
             lblStatus.AutoSize = true;
             lblStatus.Location = new Point(93, 131);
             lblStatus.Name = "lblStatus";
-            lblStatus.Size = new Size(38, 15);
+            lblStatus.Size = new Size(0, 15);
             lblStatus.TabIndex = 1;
-            lblStatus.Text = "label1";
             // 
             // btnScan
             // 
@@ -70,7 +69,7 @@
             Controls.Add(lblStatus);
             Controls.Add(listBoxDevices);
             Name = "Form1";
-            Text = "Form1";
+            Text = "Polar H10 to LSL";
             ResumeLayout(false);
             PerformLayout();
         }

@@ -143,7 +143,6 @@ namespace PolarBLE
             reader.ReadBytes(data);
             
             if (data[0] != 0x00) return;
-            
 
             int step = 3;
             data = data.Skip(10).ToArray();
@@ -151,8 +150,11 @@ namespace PolarBLE
             // Process the data in chunks of 3 bytes
             while (offset < data.Length)
             {
-                int ecg = BitConverter.ToInt32(new byte[] { data[offset], data[offset + 1], data[offset + 2], 0x00 }, 0);
-                outlet.push_sample(new float[] { ecg });
+                int raw = (data[offset]) | (data[offset + 1] << 8) | (data[offset + 2] << 16);
+                if ((raw & 0x800000) != 0)  // if sign bit (bit 23) is set
+                    raw |= unchecked((int)0xFF000000);  // sign-extend to 32 bits
+
+                outlet.push_sample(new float[] { raw });
                 offset += step;
             }
             // Animate "Streaming" label with dots to show activity

@@ -5,8 +5,6 @@ VisualStudioVersion = 17.13.35919.96
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PolarBLE", "PolarBLE.csproj", "{0700F7A2-5855-4C9C-9489-A59426829E0A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestAPP", "..\TestAPp\TestAPP.csproj", "{CFCCDE0B-F9F8-46E5-BF36-1E086EFC249A}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -17,10 +15,6 @@ Global
 		{0700F7A2-5855-4C9C-9489-A59426829E0A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0700F7A2-5855-4C9C-9489-A59426829E0A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0700F7A2-5855-4C9C-9489-A59426829E0A}.Release|Any CPU.Build.0 = Release|Any CPU
-		{CFCCDE0B-F9F8-46E5-BF36-1E086EFC249A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{CFCCDE0B-F9F8-46E5-BF36-1E086EFC249A}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{CFCCDE0B-F9F8-46E5-BF36-1E086EFC249A}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{CFCCDE0B-F9F8-46E5-BF36-1E086EFC249A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -69,6 +69,8 @@ namespace PolarBLE
             0x01,       // Sample rate (0x01 = 100Hz)
             0x04, 0x00  // Range index (optional; this sets ±4g in some docs)
         };
+        // ACC_WRITE = bytearray([0x02, 0x02, 0x00, 0x01, 0xC8, 0x00, 0x01, 0x01, 0x10, 0x00, 0x02, 0x01, 0x08, 0x00]) DHYB
+
 
         /// <summary>
         /// Internal counter for cycling the "Streaming" status animation dots.

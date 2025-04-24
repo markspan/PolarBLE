@@ -28,6 +28,7 @@
         /// </summary>
         private void InitializeComponent()
         {
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(Form1));
             listBoxDevices = new ListBox();
             lblStatus = new Label();
             btnScan = new Button();
@@ -39,20 +40,20 @@
             listBoxDevices.ItemHeight = 15;
             listBoxDevices.Location = new Point(12, 12);
             listBoxDevices.Name = "listBoxDevices";
-            listBoxDevices.Size = new Size(300, 109);
+            listBoxDevices.Size = new Size(311, 109);
             listBoxDevices.TabIndex = 0;
             // 
             // lblStatus
             // 
             lblStatus.AutoSize = true;
-            lblStatus.Location = new Point(93, 131);
+            lblStatus.Location = new Point(99, 135);
             lblStatus.Name = "lblStatus";
             lblStatus.Size = new Size(0, 15);
             lblStatus.TabIndex = 1;
             // 
             // btnScan
             // 
-            btnScan.Location = new Point(12, 127);
+            btnScan.Location = new Point(18, 131);
             btnScan.Name = "btnScan";
             btnScan.Size = new Size(75, 23);
             btnScan.TabIndex = 2;
@@ -64,10 +65,11 @@
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(321, 163);
+            ClientSize = new Size(335, 168);
             Controls.Add(btnScan);
             Controls.Add(lblStatus);
             Controls.Add(listBoxDevices);
+            Icon = (Icon)resources.GetObject("$this.Icon");
             Name = "Form1";
             Text = "Polar H10 to LSL";
             ResumeLayout(false);

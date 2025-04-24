@@ -9,8 +9,9 @@ This project is a port of my previous [PolarBand2lsl](https://github.com/markspa
 ## 🧠 Features
 
 - Scan for nearby **Polar H10** devices via BLE  
-- Connect and subscribe to the ECG measurement service  
-- Decode and stream **130 Hz** ECG data to **LSL**  
+- Connect and subscribe to the ECG and ACC measurement service  
+- Decode and stream **130 Hz** ECG data to **LSL**
+- Decode and stream **200 Hz** ACC data to **LSL**  
 - Simple UI for quick interaction  
 
 ---

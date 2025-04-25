@@ -5,7 +5,8 @@
 This project is a port of my previous [PolarBand2lsl](https://github.com/markspan/PolarBand2lsl) Python/Kivy implementation.
 I took info from the project [Dont-hold-your-breath](https://github.com/kieranabrennan/dont-hold-your-breath) by Kieran Brennan. Look it up!
 
-![](Screenshot 2025-04-25 095512.png)
+![Screenshot](https://github.com/markspan/PolarBLE/blob/main/Screenshot.png)
+
 ---
 
 ## 🧠 Features

@@ -13,7 +13,6 @@ I took info from the project [Dont-hold-your-breath](https://github.com/kieranab
 - Connect and subscribe to the ECG measurement service  
 - Decode and stream **130 Hz** ECG data to **LSL**  
 - Decode and stream **200Hz** ACC data to **LSL** 
-
 ---
 
 ## 💻 Requirements

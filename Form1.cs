@@ -5,6 +5,7 @@ using Windows.Devices.Bluetooth.GenericAttributeProfile;
 using LSL;
 using System.Reflection.PortableExecutable;
 using Windows.Storage.Streams;
+using System.Windows.Forms;
 
 
 namespace PolarBLE
@@ -269,7 +270,8 @@ namespace PolarBLE
 
             if (data.Length < 10 || data[0] != 0x02) return;
 
-            int resolution = 16;// data[4]; // usually 16 bits
+            byte frame_type = data[9];
+            int resolution = (frame_type + 1) *8;
             int bytesPerAxis = resolution / 8;
             int bytesPerSample = 3 * bytesPerAxis;
 
@@ -283,8 +285,6 @@ namespace PolarBLE
 
                 accOutlet?.push_sample(new float[] { x, y, z });
             }
-            dotState = (dotState + 1) % 4;
-            string dots = new string('.', dotState);
             BeginInvoke(() => lblStatus.ForeColor = Color.Green);
         }
 

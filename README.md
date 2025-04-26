@@ -31,4 +31,4 @@ I took info from the project [Dont-hold-your-breath](https://github.com/kieranab
 Download the last Release from the GitHub repository, unzip and run.
 The Program will start looking for nearby polar bands and display their ID. 
 When you click on the ID of the band you want to stream, it will start streaming. 
-This can take some time (up to a minute), the programm will inform you when streaming is in progress.
+This can take some time (up to a minute), the program will inform you when streaming is in progress.

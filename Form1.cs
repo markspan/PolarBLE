@@ -271,7 +271,7 @@ namespace PolarBLE
             if (data.Length < 10 || data[0] != 0x02) return;
 
             byte frame_type = data[9];
-            int resolution = (frame_type + 1) *8;
+            int resolution = (frame_type + 1) * 8;
             int bytesPerAxis = resolution / 8;
             int bytesPerSample = 3 * bytesPerAxis;
 
@@ -285,6 +285,7 @@ namespace PolarBLE
 
                 accOutlet?.push_sample(new float[] { x, y, z });
             }
+            // color the label green to show the acc streaming also works.
             BeginInvoke(() => lblStatus.ForeColor = Color.Green);
         }
 

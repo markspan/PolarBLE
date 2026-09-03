@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Vendored, UNMODIFIED liblsl C# binding (https://github.com/sccn/liblsl).
+       It lives in its own project so that the strict analysis settings in
+       Directory.Build.props apply to our code without us having to edit
+       third-party source. Do not "fix" warnings in LSL.cs: keep it diffable
+       against upstream. -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>PolarBLE.Liblsl</AssemblyName>
+    <RootNamespace>LSL</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AnalysisLevel>none</AnalysisLevel>
+    <NoWarn>$(NoWarn);CS8600;CS8601;CS8603;CS8625;CS8981;CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The native liblsl binary. Flows to every consuming project's output. -->
+    <Content Include="lsl.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>lsl.dll</Link>
+    </Content>
+  </ItemGroup>
+
+</Project>

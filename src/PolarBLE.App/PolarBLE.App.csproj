@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The Windows-only shell: WinRT Bluetooth plus the WinForms user interface.
+       All decoding, timing and streaming logic lives in PolarBLE.Core. -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>PolarBLE</AssemblyName>
+    <RootNamespace>PolarBLE.App</RootNamespace>
+    <ApplicationIcon>icon.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- Everything here is internal to the executable, so XML docs are not required. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../PolarBLE.Core/PolarBLE.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="icon.ico" LogicalName="PolarBLE.App.icon.ico" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Platform-free analysis core: PMD protocol codec, sample timing and the LSL sink.
+       Deliberately targets plain net8.0 (no WinRT, no WinForms) so that every byte-level
+       decoding rule can be unit tested without a Polar strap or a Bluetooth radio. -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>PolarBLE.Core</AssemblyName>
+    <RootNamespace>PolarBLE.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../third_party/liblsl/PolarBLE.Liblsl.csproj" />
+  </ItemGroup>
+
+</Project>

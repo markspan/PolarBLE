@@ -1,0 +1,75 @@
+name: build
+
+on:
+  push:
+    branches: [main, Development]
+  pull_request:
+    branches: [main, Development]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build and test (${{ matrix.configuration }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore PolarBLE.sln
+
+      - name: Build
+        run: dotnet build PolarBLE.sln --configuration ${{ matrix.configuration }} --no-restore
+
+      # The PMD decoders are pure functions, so the whole protocol layer is covered here
+      # without a strap or a Bluetooth radio.
+      - name: Test
+        run: dotnet test PolarBLE.sln --configuration ${{ matrix.configuration }} --no-build --verbosity normal
+
+  package:
+    name: package
+    needs: build
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish
+        run: >
+          dotnet publish src/PolarBLE.App/PolarBLE.App.csproj
+          --configuration Release
+          --output publish
+
+      - name: Zip
+        run: Compress-Archive -Path publish/* -DestinationPath PolarBLE.zip
+        shell: pwsh
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PolarBLE
+          path: PolarBLE.zip
+
+      # The README tells users to download the latest release, so a published release gets
+      # the zip attached to it automatically.
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: PolarBLE.zip

@@ -23,6 +23,8 @@ internal sealed class PolarH10Session : IAsyncDisposable
     private static readonly TimeSpan ControlPointTimeout = TimeSpan.FromSeconds(10);
 
     private readonly BluetoothLEDevice _device;
+    private readonly GattDeviceService _pmdService;
+    private readonly GattDeviceService? _batteryService;
     private readonly GattCharacteristic _controlPoint;
     private readonly GattCharacteristic _data;
     private readonly GattCharacteristic? _batteryLevel;
@@ -37,6 +39,8 @@ internal sealed class PolarH10Session : IAsyncDisposable
 
     private PolarH10Session(
         BluetoothLEDevice device,
+        GattDeviceService pmdService,
+        GattDeviceService? batteryService,
         GattCharacteristic controlPoint,
         GattCharacteristic data,
         GattCharacteristic? batteryLevel,
@@ -44,6 +48,8 @@ internal sealed class PolarH10Session : IAsyncDisposable
         ISampleSink accSink)
     {
         _device = device;
+        _pmdService = pmdService;
+        _batteryService = batteryService;
         _controlPoint = controlPoint;
         _data = data;
         _batteryLevel = batteryLevel;
@@ -78,6 +84,17 @@ internal sealed class PolarH10Session : IAsyncDisposable
     public string DeviceName { get; private set; } = string.Empty;
 
     /// <summary>
+    /// The most recently observed battery percentage, or null if none has arrived yet.
+    /// </summary>
+    /// <remarks>
+    /// The initial battery read happens as part of connecting, which finishes before a caller
+    /// has had a chance to subscribe to <see cref="BatteryLevelChanged"/>. Callers that connect
+    /// and only then subscribe should read this property immediately afterwards to pick up a
+    /// reading that arrived before they were listening.
+    /// </remarks>
+    public int? BatteryPercent { get; private set; }
+
+    /// <summary>
     /// Connects to a strap and starts both measurements.
     /// </summary>
     /// <remarks>
@@ -102,44 +119,10 @@ internal sealed class PolarH10Session : IAsyncDisposable
             throw new PolarConnectionException(
                 "Windows could not open the device. Check that Bluetooth is on and the strap is worn.");
 
+        PolarH10Session session;
         try
         {
-            var pmd = await GetServiceAsync(bleDevice, PolarUuids.PmdService, cancellationToken);
-            var controlPoint = await GetCharacteristicAsync(pmd, PolarUuids.PmdControlPoint, cancellationToken);
-            var data = await GetCharacteristicAsync(pmd, PolarUuids.PmdData, cancellationToken);
-            var battery = await TryGetBatteryCharacteristicAsync(bleDevice, cancellationToken);
-
-            var name = string.IsNullOrWhiteSpace(bleDevice.Name) ? device.Name : bleDevice.Name;
-            var address = device.AddressText;
-
-            // Outlets first: a sample that arrives before they exist would be lost silently.
-            ISampleSink ecgSink = new LslSampleSink(PolarH10Configuration.EcgStream(name, address));
-            ISampleSink accSink;
-            try
-            {
-                accSink = new LslSampleSink(PolarH10Configuration.AccStream(name, address));
-            }
-            catch
-            {
-                ecgSink.Dispose();
-                throw;
-            }
-
-            var session = new PolarH10Session(bleDevice, controlPoint, data, battery, ecgSink, accSink)
-            {
-                DeviceName = name,
-            };
-
-            try
-            {
-                await session.StartStreamingAsync(cancellationToken);
-                return session;
-            }
-            catch
-            {
-                await session.DisposeAsync();
-                throw;
-            }
+            session = await CreateSessionAsync(bleDevice, device, cancellationToken);
         }
         catch (PolarConnectionException)
         {
@@ -150,6 +133,73 @@ internal sealed class PolarH10Session : IAsyncDisposable
         {
             bleDevice.Dispose();
             throw new PolarConnectionException("Could not start streaming from the strap.", ex);
+        }
+
+        // From here every acquired resource is owned by `session`, so a failure must be torn
+        // down through DisposeAsync rather than released piecemeal a second time.
+        try
+        {
+            await session.StartStreamingAsync(cancellationToken);
+            return session;
+        }
+        catch
+        {
+            await session.DisposeAsync();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Discovers the GATT services and characteristics this session needs and wraps them in a
+    /// session object, rolling back everything it acquired if any step fails.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="GattDeviceService"/> holds a native GATT session open until disposed. The
+    /// original implementation never disposed the services it discovered, so each connection
+    /// leaked one and, after a few connect/disconnect cycles, Windows started refusing new GATT
+    /// operations with <c>AccessDenied</c> until the strap itself was power-cycled.
+    /// </remarks>
+    private static async Task<PolarH10Session> CreateSessionAsync(
+        BluetoothLEDevice bleDevice,
+        DiscoveredDevice device,
+        CancellationToken cancellationToken)
+    {
+        GattDeviceService? pmdService = null;
+        GattDeviceService? batteryService = null;
+        ISampleSink? ecgSink = null;
+        ISampleSink? accSink = null;
+
+        try
+        {
+            pmdService = await GetServiceAsync(bleDevice, PolarUuids.PmdService, cancellationToken);
+            var controlPoint =
+                await GetCharacteristicAsync(pmdService, PolarUuids.PmdControlPoint, cancellationToken);
+            var data = await GetCharacteristicAsync(pmdService, PolarUuids.PmdData, cancellationToken);
+
+            var (battery, discoveredBatteryService) =
+                await TryGetBatteryCharacteristicAsync(bleDevice, cancellationToken);
+            batteryService = discoveredBatteryService;
+
+            var name = string.IsNullOrWhiteSpace(bleDevice.Name) ? device.Name : bleDevice.Name;
+            var address = device.AddressText;
+
+            // Outlets first: a sample that arrives before they exist would be lost silently.
+            ecgSink = new LslSampleSink(PolarH10Configuration.EcgStream(name, address));
+            accSink = new LslSampleSink(PolarH10Configuration.AccStream(name, address));
+
+            return new PolarH10Session(
+                bleDevice, pmdService, batteryService, controlPoint, data, battery, ecgSink, accSink)
+            {
+                DeviceName = name,
+            };
+        }
+        catch
+        {
+            ecgSink?.Dispose();
+            accSink?.Dispose();
+            batteryService?.Dispose();
+            pmdService?.Dispose();
+            throw;
         }
     }
 
@@ -367,7 +417,7 @@ internal sealed class PolarH10Session : IAsyncDisposable
                 CryptographicBuffer.CopyToByteArray(read.Value, out var bytes);
                 if (bytes is { Length: > 0 })
                 {
-                    BatteryLevelChanged?.Invoke(this, bytes[0]);
+                    SetBatteryPercent(bytes[0]);
                 }
             }
 
@@ -393,8 +443,24 @@ internal sealed class PolarH10Session : IAsyncDisposable
         CryptographicBuffer.CopyToByteArray(args.CharacteristicValue, out var bytes);
         if (bytes is { Length: > 0 })
         {
-            BatteryLevelChanged?.Invoke(this, bytes[0]);
+            SetBatteryPercent(bytes[0]);
         }
+    }
+
+    /// <summary>
+    /// Records a battery reading and raises <see cref="BatteryLevelChanged"/>.
+    /// </summary>
+    /// <remarks>
+    /// The very first reading happens while <see cref="ConnectAsync"/> is still running, before
+    /// a caller can possibly have subscribed to the event yet. Caching the value here means a
+    /// caller that subscribes right after <see cref="ConnectAsync"/> returns and then reads
+    /// <see cref="BatteryPercent"/> still sees it, instead of the reading having been raised
+    /// into an event with no listeners and lost.
+    /// </remarks>
+    private void SetBatteryPercent(int percent)
+    {
+        BatteryPercent = percent;
+        BatteryLevelChanged?.Invoke(this, percent);
     }
 
     private void OnConnectionStatusChanged(BluetoothLEDevice sender, object args)
@@ -420,6 +486,12 @@ internal sealed class PolarH10Session : IAsyncDisposable
                 "Make sure the strap is worn and not connected to another application.");
         }
 
+        // Every service the caller does not keep would otherwise leak its GATT session.
+        for (var i = 1; i < result.Services.Count; i++)
+        {
+            result.Services[i].Dispose();
+        }
+
         return result.Services[0];
     }
 
@@ -440,10 +512,10 @@ internal sealed class PolarH10Session : IAsyncDisposable
         return result.Characteristics[0];
     }
 
-    private static async Task<GattCharacteristic?> TryGetBatteryCharacteristicAsync(
-        BluetoothLEDevice device,
-        CancellationToken cancellationToken)
+    private static async Task<(GattCharacteristic? Characteristic, GattDeviceService? Service)>
+        TryGetBatteryCharacteristicAsync(BluetoothLEDevice device, CancellationToken cancellationToken)
     {
+        GattDeviceService? service = null;
         try
         {
             var services = await device
@@ -452,21 +524,33 @@ internal sealed class PolarH10Session : IAsyncDisposable
 
             if (services.Status != GattCommunicationStatus.Success || services.Services.Count == 0)
             {
-                return null;
+                return (null, null);
             }
 
-            var characteristics = await services.Services[0]
+            for (var i = 1; i < services.Services.Count; i++)
+            {
+                services.Services[i].Dispose();
+            }
+
+            service = services.Services[0];
+
+            var characteristics = await service
                 .GetCharacteristicsForUuidAsync(PolarUuids.BatteryLevel, BluetoothCacheMode.Uncached)
                 .AsTask(cancellationToken);
 
-            return characteristics.Status == GattCommunicationStatus.Success &&
-                   characteristics.Characteristics.Count > 0
-                ? characteristics.Characteristics[0]
-                : null;
+            if (characteristics.Status == GattCommunicationStatus.Success &&
+                characteristics.Characteristics.Count > 0)
+            {
+                return (characteristics.Characteristics[0], service);
+            }
+
+            service.Dispose();
+            return (null, null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return null;
+            service?.Dispose();
+            return (null, null);
         }
     }
 
@@ -491,6 +575,11 @@ internal sealed class PolarH10Session : IAsyncDisposable
     /// The original implementation did none of this, so the strap kept streaming after the
     /// window closed and the outlets lingered on the network.
     /// </summary>
+    /// <remarks>
+    /// The GATT services are disposed last, after everything obtained from them (the
+    /// characteristics) has finished being used. Leaving either service undisposed is what used
+    /// to make every reconnect after the first fail with <c>AccessDenied</c>.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -515,6 +604,9 @@ internal sealed class PolarH10Session : IAsyncDisposable
 
         _ecgSink.Dispose();
         _accSink.Dispose();
+
+        _batteryService?.Dispose();
+        _pmdService.Dispose();
         _device.Dispose();
     }
 

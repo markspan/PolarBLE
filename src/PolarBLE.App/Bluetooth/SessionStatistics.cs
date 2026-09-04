@@ -10,7 +10,6 @@ internal sealed class SessionStatistics(string label)
     private long _samples;
     private long _frames;
     private long _unsupportedFrames;
-    private long _lastSampleSnapshot;
 
     /// <summary>Human-readable stream name.</summary>
     public string Label { get; } = label;
@@ -34,16 +33,4 @@ internal sealed class SessionStatistics(string label)
 
     /// <summary>Records a frame that could not be decoded.</summary>
     public void RecordUnsupportedFrame() => Interlocked.Increment(ref _unsupportedFrames);
-
-    /// <summary>
-    /// Measured sample rate since the previous call, in hertz.
-    /// </summary>
-    /// <param name="elapsedSeconds">Time since the previous call.</param>
-    /// <returns>The observed rate, or 0 when no time has passed.</returns>
-    public double ConsumeRate(double elapsedSeconds)
-    {
-        var current = Samples;
-        var delta = current - Interlocked.Exchange(ref _lastSampleSnapshot, current);
-        return elapsedSeconds > 0 ? delta / elapsedSeconds : 0;
-    }
 }

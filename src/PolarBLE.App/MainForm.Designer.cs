@@ -106,12 +106,14 @@ partial class MainForm
         //
         // lblThroughput
         //
+        // A fixed-width monospace font is what keeps the ECG/ACC rows from visibly shifting as
+        // their sample counts pick up more digits over the course of a recording.
         lblThroughput.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-        lblThroughput.AutoEllipsis = true;
+        lblThroughput.Font = CreateMonospaceFont(9F);
         lblThroughput.ForeColor = SystemColors.GrayText;
-        lblThroughput.Location = new Point(12, 232);
+        lblThroughput.Location = new Point(12, 234);
         lblThroughput.Name = "lblThroughput";
-        lblThroughput.Size = new Size(436, 17);
+        lblThroughput.Size = new Size(436, 34);
         lblThroughput.TabIndex = 6;
         //
         // uiTimer
@@ -123,8 +125,8 @@ partial class MainForm
         //
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(460, 258);
-        MinimumSize = new Size(400, 260);
+        ClientSize = new Size(460, 280);
+        MinimumSize = new Size(400, 280);
         Controls.Add(lblThroughput);
         Controls.Add(lblStatus);
         Controls.Add(batteryBar);

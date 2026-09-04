@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using PolarBLE.App.Bluetooth;
@@ -11,18 +10,41 @@ namespace PolarBLE.App;
 internal sealed partial class MainForm : Form
 {
     private readonly PolarScanner _scanner = new();
-    private readonly Stopwatch _sinceLastTick = Stopwatch.StartNew();
 
     private PolarH10Session? _session;
     private CancellationTokenSource? _connectCancellation;
     private bool _connecting;
+    private long _lastReportedProblems = -1;
+    private readonly Color _defaultStatusColor;
 
     public MainForm()
     {
         InitializeComponent();
         LoadWindowIcon();
+        _defaultStatusColor = lblStatus.ForeColor;
 
         _scanner.DeviceDiscovered += OnDeviceDiscovered;
+    }
+
+    /// <summary>
+    /// Finds a monospace font so telemetry columns line up, preferring the faces most likely to
+    /// already be installed on Windows and falling back to whatever the OS considers monospace.
+    /// </summary>
+    private static Font CreateMonospaceFont(float sizeInPoints)
+    {
+        string[] preferred = ["Consolas", "Cascadia Mono", "Courier New"];
+        foreach (var name in preferred)
+        {
+            foreach (var family in FontFamily.Families)
+            {
+                if (string.Equals(family.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new Font(name, sizeInPoints);
+                }
+            }
+        }
+
+        return new Font(FontFamily.GenericMonospace, sizeInPoints);
     }
 
     private bool IsConnected => _session is not null;
@@ -126,7 +148,15 @@ internal sealed partial class MainForm : Form
             session.StreamError += OnStreamError;
             _session = session;
 
-            _sinceLastTick.Restart();
+            // The first battery reading happens during ConnectAsync, before this handler could
+            // possibly have been subscribed, so it would otherwise be lost until the strap next
+            // notifies a change (which, for a slowly-draining battery, can be a long wait).
+            if (session.BatteryPercent is { } percent)
+            {
+                batteryBar.Value = percent;
+            }
+
+            _lastReportedProblems = -1;
             uiTimer.Start();
 
             btnConnect.Text = "&Disconnect";
@@ -172,6 +202,7 @@ internal sealed partial class MainForm : Form
 
         batteryBar.Value = -1;
         lblThroughput.Text = string.Empty;
+        _lastReportedProblems = -1;
         btnConnect.Text = "&Connect";
         SetStatus("Disconnected.");
     }
@@ -196,6 +227,13 @@ internal sealed partial class MainForm : Form
     /// code marshalled to the UI thread on every single notification just to animate an
     /// ellipsis and to set a colour that never changed again.
     /// </summary>
+    /// <remarks>
+    /// Every field here is padded to a fixed width, so the two rows never shift left or right
+    /// as a sample count picks up another digit over the course of a recording — only the
+    /// digits themselves change, never their position. Dropped-frame and gap counts, which only
+    /// ever appear once something is actually wrong, are reported through the status line
+    /// instead of appended here, so they cannot perturb this layout either.
+    /// </remarks>
     private void UiTimer_Tick(object? sender, EventArgs e)
     {
         var session = _session;
@@ -204,28 +242,28 @@ internal sealed partial class MainForm : Form
             return;
         }
 
-        var elapsed = _sinceLastTick.Elapsed.TotalSeconds;
-        _sinceLastTick.Restart();
-
-        var ecgRate = session.EcgStatistics.ConsumeRate(elapsed);
-        var accRate = session.AccStatistics.ConsumeRate(elapsed);
-
-        var text = string.Create(
+        lblThroughput.Text = string.Create(
             CultureInfo.CurrentCulture,
-            $"ECG {ecgRate:F0} Hz ({session.EcgStatistics.Samples:N0} samples)   " +
-            $"ACC {accRate:F0} Hz ({session.AccStatistics.Samples:N0} samples)");
+            $"ECG {session.EcgStatistics.Samples,12:N0} samples\n" +
+            $"ACC {session.AccStatistics.Samples,12:N0} samples");
 
         var problems = session.DroppedFrames + session.Discontinuities +
                        session.EcgStatistics.UnsupportedFrames + session.AccStatistics.UnsupportedFrames;
-        if (problems > 0)
+        if (problems != _lastReportedProblems)
         {
-            text += string.Create(
-                CultureInfo.CurrentCulture,
-                $"   ·  {session.DroppedFrames} dropped, {session.Discontinuities} gaps");
+            _lastReportedProblems = problems;
+            if (problems > 0)
+            {
+                SetStatus(
+                    $"Streaming from {session.DeviceName} — {session.DroppedFrames} dropped, " +
+                    $"{session.Discontinuities} gaps.",
+                    Color.Firebrick);
+            }
+            else
+            {
+                SetStatus($"Streaming from {session.DeviceName}.");
+            }
         }
-
-        lblThroughput.Text = text;
-        lblThroughput.ForeColor = problems > 0 ? Color.Firebrick : SystemColors.GrayText;
     }
 
     private async void MainForm_FormClosing(object? sender, FormClosingEventArgs e)
@@ -244,7 +282,11 @@ internal sealed partial class MainForm : Form
         }
     }
 
-    private void SetStatus(string message) => lblStatus.Text = message;
+    private void SetStatus(string message, Color? color = null)
+    {
+        lblStatus.Text = message;
+        lblStatus.ForeColor = color ?? _defaultStatusColor;
+    }
 
     /// <summary>
     /// Marshals to the UI thread, tolerating the window being torn down underneath us.

@@ -15,8 +15,7 @@ I took info from the project [Dont-hold-your-breath](https://github.com/kieranab
 - Connect and start the Polar Measurement Data (PMD) ECG and accelerometer streams
 - Decode and stream **130 Hz** ECG data to **LSL**
 - Decode and stream **200 Hz** accelerometer data to **LSL**, including delta-compressed frames
-- Per-sample timestamps on a continuous grid, rather than one timestamp per arriving burst
-- Live throughput, dropped-frame and gap counters, so a stalled stream is visible
+- Live sample-count telemetry for both streams
 - Battery level, updated live for the duration of the recording
 
 ---
@@ -36,9 +35,7 @@ Each stream also carries an `acquisition` metadata block naming the manufacturer
 
 ### A note on timestamps
 
-The strap delivers samples in bursts: roughly 73 ECG samples arrive in a single BLE notification. Stamping them all at arrival time, which is what LSL does by default, collapses a whole burst onto one instant and leaves a gap until the next notification, misplacing samples by up to about half a second.
-
-PolarBLE instead maintains a continuous sample grid. The last sample of a frame is taken to arrive now, the rest are back-dated at the nominal sample interval, and the grid is nudged gently towards observed arrival times so that it tracks clock drift without jittering. A disagreement larger than half a second is treated as a real discontinuity: the grid resynchronises, and the event is counted and shown in the window rather than being silently smoothed away. The device's own nanosecond frame timestamps are used to detect frames lost in transit.
+PolarBLE does not compute timestamps itself. Each burst of decoded samples is pushed to LSL in one `push_chunk` call with no timestamp argument, so liblsl stamps it at push time — the same thing it has always done for a single-sample push, just called once per BLE notification instead of once per sample.
 
 ---
 

@@ -6,9 +6,10 @@ namespace PolarBLE.Core.Streaming;
 /// An <see cref="ISampleSink"/> backed by a LabStreamingLayer outlet.
 /// </summary>
 /// <remarks>
-/// Samples are pushed a whole frame at a time with explicit per-sample timestamps. The
-/// original implementation pushed one sample per interop call with the default timestamp,
-/// which forced a network flush per sample and discarded the intra-frame timing.
+/// Samples are pushed a whole frame at a time rather than one interop call per sample, which
+/// is the only change from letting liblsl time each push by default: no timestamp is supplied
+/// here either, so liblsl stamps the chunk at push time and derives every earlier sample in it
+/// from the stream's own declared sample rate, exactly as it would for a single-sample push.
 /// </remarks>
 public sealed class LslSampleSink : ISampleSink
 {
@@ -24,7 +25,6 @@ public sealed class LslSampleSink : ISampleSink
     private readonly StreamOutlet _outlet;
 
     private float[,]? _buffer;
-    private double[]? _stamps;
     private bool _disposed;
 
     /// <summary>
@@ -64,7 +64,7 @@ public sealed class LslSampleSink : ISampleSink
     public bool HasConsumers => !_disposed && _outlet.have_consumers();
 
     /// <inheritdoc />
-    public void PushChunk(ReadOnlySpan<float> interleaved, ReadOnlySpan<double> timestamps, int sampleCount)
+    public void PushChunk(ReadOnlySpan<float> interleaved, int sampleCount)
     {
         if (sampleCount <= 0 || _disposed)
         {
@@ -77,19 +77,13 @@ public sealed class LslSampleSink : ISampleSink
             throw new ArgumentException("Sample buffer is shorter than the declared frame.", nameof(interleaved));
         }
 
-        if (timestamps.Length < sampleCount)
-        {
-            throw new ArgumentException("Timestamp buffer is shorter than the declared frame.", nameof(timestamps));
-        }
-
         lock (_pushLock)
         {
-            // liblsl derives the element count from the array length, so the staging buffers
+            // liblsl derives the element count from the array length, so the staging buffer
             // must be sized exactly. Frame sizes are near-constant, so this reallocates once.
             if (_buffer is null || _buffer.GetLength(0) != sampleCount)
             {
                 _buffer = new float[sampleCount, ChannelCount];
-                _stamps = new double[sampleCount];
             }
 
             for (var sample = 0; sample < sampleCount; sample++)
@@ -98,11 +92,11 @@ public sealed class LslSampleSink : ISampleSink
                 {
                     _buffer[sample, channel] = interleaved[(sample * ChannelCount) + channel];
                 }
-
-                _stamps![sample] = timestamps[sample];
             }
 
-            _outlet.push_chunk(_buffer, _stamps!);
+            // No timestamp argument: liblsl stamps the chunk with the current time and derives
+            // every earlier sample in it from the stream's declared sample rate.
+            _outlet.push_chunk(_buffer);
             SamplesPushed += sampleCount;
         }
     }

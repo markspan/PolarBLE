@@ -13,15 +13,12 @@ internal sealed partial class MainForm : Form
 
     private PolarH10Session? _session;
     private CancellationTokenSource? _connectCancellation;
-    private bool _connecting;
-    private long _lastReportedProblems = -1;
-    private readonly Color _defaultStatusColor;
+    private bool _busy;
 
     public MainForm()
     {
         InitializeComponent();
         LoadWindowIcon();
-        _defaultStatusColor = lblStatus.ForeColor;
 
         _scanner.DeviceDiscovered += OnDeviceDiscovered;
     }
@@ -95,11 +92,11 @@ internal sealed partial class MainForm : Form
         RunOnUi(() => listBoxDevices.Items.Add(device));
 
     private void ListBoxDevices_SelectedIndexChanged(object? sender, EventArgs e) =>
-        btnConnect.Enabled = !_connecting && (IsConnected || listBoxDevices.SelectedItem is DiscoveredDevice);
+        btnConnect.Enabled = !_busy && (IsConnected || listBoxDevices.SelectedItem is DiscoveredDevice);
 
     private async void ListBoxDevices_DoubleClick(object? sender, EventArgs e)
     {
-        if (!IsConnected && !_connecting && listBoxDevices.SelectedItem is DiscoveredDevice)
+        if (!IsConnected && !_busy && listBoxDevices.SelectedItem is DiscoveredDevice)
         {
             await ToggleConnectionAsync();
         }
@@ -114,7 +111,7 @@ internal sealed partial class MainForm : Form
     /// </summary>
     private async Task ToggleConnectionAsync()
     {
-        if (_connecting)
+        if (_busy)
         {
             return;
         }
@@ -130,7 +127,7 @@ internal sealed partial class MainForm : Form
             return;
         }
 
-        _connecting = true;
+        _busy = true;
         btnConnect.Enabled = false;
         btnScan.Enabled = false;
         SetStatus($"Connecting to {device.Name}… this can take up to a minute.");
@@ -156,7 +153,6 @@ internal sealed partial class MainForm : Form
                 batteryBar.Value = percent;
             }
 
-            _lastReportedProblems = -1;
             uiTimer.Start();
 
             btnConnect.Text = "&Disconnect";
@@ -178,33 +174,58 @@ internal sealed partial class MainForm : Form
         {
             _connectCancellation?.Dispose();
             _connectCancellation = null;
-            _connecting = false;
+            _busy = false;
             btnScan.Enabled = true;
             btnConnect.Enabled = IsConnected || listBoxDevices.SelectedItem is DiscoveredDevice;
         }
     }
 
+    /// <summary>
+    /// Guards itself against re-entry rather than relying on each caller to remember to: it is
+    /// reached from a button click, from a lost-connection notification and from the window
+    /// closing, and the strap's own stop commands make this a genuinely awaited operation, not
+    /// an instant one. Without the guard the button stayed enabled and labelled "Disconnect"
+    /// for that whole stretch — because <see cref="_session"/> is cleared up front, a second
+    /// click during it saw <see cref="IsConnected"/> already false and fell through to
+    /// <see cref="ToggleConnectionAsync"/>'s connect branch instead of being ignored.
+    /// </summary>
     private async Task DisconnectAsync()
     {
-        var session = _session;
-        _session = null;
-        uiTimer.Stop();
+        if (_busy)
+        {
+            return;
+        }
 
-        if (session is not null)
+        var session = _session;
+        if (session is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        btnConnect.Enabled = false;
+        uiTimer.Stop();
+        _session = null;
+
+        try
         {
             session.ConnectionLost -= OnConnectionLost;
             session.BatteryLevelChanged -= OnBatteryLevelChanged;
             session.StreamError -= OnStreamError;
 
-            SetStatus("Stopping measurement…");
+            SetStatus("Disconnecting…");
             await session.DisposeAsync();
-        }
 
-        batteryBar.Value = -1;
-        lblThroughput.Text = string.Empty;
-        _lastReportedProblems = -1;
-        btnConnect.Text = "&Connect";
-        SetStatus("Disconnected.");
+            batteryBar.Value = -1;
+            lblThroughput.Text = string.Empty;
+            btnConnect.Text = "&Connect";
+            SetStatus("Disconnected.");
+        }
+        finally
+        {
+            _busy = false;
+            btnConnect.Enabled = IsConnected || listBoxDevices.SelectedItem is DiscoveredDevice;
+        }
     }
 
     private void OnConnectionLost(object? sender, EventArgs e) => RunOnUi(async () =>
@@ -228,11 +249,9 @@ internal sealed partial class MainForm : Form
     /// ellipsis and to set a colour that never changed again.
     /// </summary>
     /// <remarks>
-    /// Every field here is padded to a fixed width, so the two rows never shift left or right
-    /// as a sample count picks up another digit over the course of a recording — only the
-    /// digits themselves change, never their position. Dropped-frame and gap counts, which only
-    /// ever appear once something is actually wrong, are reported through the status line
-    /// instead of appended here, so they cannot perturb this layout either.
+    /// Both fields are padded to a fixed width, so the two rows never shift left or right as a
+    /// sample count picks up another digit over the course of a recording — only the digits
+    /// themselves change, never their position.
     /// </remarks>
     private void UiTimer_Tick(object? sender, EventArgs e)
     {
@@ -246,24 +265,6 @@ internal sealed partial class MainForm : Form
             CultureInfo.CurrentCulture,
             $"ECG {session.EcgStatistics.Samples,12:N0} samples\n" +
             $"ACC {session.AccStatistics.Samples,12:N0} samples");
-
-        var problems = session.DroppedFrames + session.Discontinuities +
-                       session.EcgStatistics.UnsupportedFrames + session.AccStatistics.UnsupportedFrames;
-        if (problems != _lastReportedProblems)
-        {
-            _lastReportedProblems = problems;
-            if (problems > 0)
-            {
-                SetStatus(
-                    $"Streaming from {session.DeviceName} — {session.DroppedFrames} dropped, " +
-                    $"{session.Discontinuities} gaps.",
-                    Color.Firebrick);
-            }
-            else
-            {
-                SetStatus($"Streaming from {session.DeviceName}.");
-            }
-        }
     }
 
     private async void MainForm_FormClosing(object? sender, FormClosingEventArgs e)
@@ -282,11 +283,7 @@ internal sealed partial class MainForm : Form
         }
     }
 
-    private void SetStatus(string message, Color? color = null)
-    {
-        lblStatus.Text = message;
-        lblStatus.ForeColor = color ?? _defaultStatusColor;
-    }
+    private void SetStatus(string message) => lblStatus.Text = message;
 
     /// <summary>
     /// Marshals to the UI thread, tolerating the window being torn down underneath us.

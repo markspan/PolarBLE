@@ -4,7 +4,6 @@ using Windows.Devices.Bluetooth.GenericAttributeProfile;
 using Windows.Security.Cryptography;
 using PolarBLE.Core.Polar;
 using PolarBLE.Core.Streaming;
-using PolarBLE.Core.Timing;
 
 namespace PolarBLE.App.Bluetooth;
 
@@ -15,8 +14,8 @@ internal sealed class PolarConnectionException(string message, Exception? inner 
     : Exception(message, inner);
 
 /// <summary>
-/// One connected Polar H10: owns the GATT connection, the decoders, the sample clocks and the
-/// LSL outlets, and tears all of them down deterministically.
+/// One connected Polar H10: owns the GATT connection, the decoders and the LSL outlets, and
+/// tears all of them down deterministically.
 /// </summary>
 internal sealed class PolarH10Session : IAsyncDisposable
 {
@@ -31,8 +30,6 @@ internal sealed class PolarH10Session : IAsyncDisposable
 
     private readonly ISampleSink _ecgSink;
     private readonly ISampleSink _accSink;
-    private readonly FrameClock _ecgClock;
-    private readonly FrameClock _accClock;
 
     private TaskCompletionSource<PmdControlPointResponse>? _pendingResponse;
     private bool _disposed;
@@ -55,8 +52,6 @@ internal sealed class PolarH10Session : IAsyncDisposable
         _batteryLevel = batteryLevel;
         _ecgSink = ecgSink;
         _accSink = accSink;
-        _ecgClock = new FrameClock(PolarH10Configuration.EcgSampleRateHz);
-        _accClock = new FrameClock(PolarH10Configuration.AccSampleRateHz);
     }
 
     /// <summary>Raised when the strap disconnects unexpectedly.</summary>
@@ -73,12 +68,6 @@ internal sealed class PolarH10Session : IAsyncDisposable
 
     /// <summary>Accelerometer counters.</summary>
     public SessionStatistics AccStatistics { get; } = new("ACC");
-
-    /// <summary>Frames whose device timestamps imply data was lost in transit.</summary>
-    public long DroppedFrames => _ecgClock.DroppedFrameCount + _accClock.DroppedFrameCount;
-
-    /// <summary>Times a stream visibly skipped and the sample grid had to resynchronise.</summary>
-    public long Discontinuities => _ecgClock.DiscontinuityCount + _accClock.DiscontinuityCount;
 
     /// <summary>The connected strap's name.</summary>
     public string DeviceName { get; private set; } = string.Empty;
@@ -290,9 +279,6 @@ internal sealed class PolarH10Session : IAsyncDisposable
     {
         try
         {
-            // Stamp arrival as early as possible: everything after this adds latency.
-            var arrival = LSL.LSL.local_clock();
-
             CryptographicBuffer.CopyToByteArray(args.CharacteristicValue, out var bytes);
             if (bytes is null || !PmdFrameHeader.TryParse(bytes, out var header, out var payload))
             {
@@ -305,10 +291,10 @@ internal sealed class PolarH10Session : IAsyncDisposable
             switch (header.MeasurementType)
             {
                 case PmdMeasurementType.Ecg:
-                    HandleEcgFrame(header, payload, arrival);
+                    HandleEcgFrame(header, payload);
                     break;
                 case PmdMeasurementType.Acc:
-                    HandleAccFrame(header, payload, arrival);
+                    HandleAccFrame(header, payload);
                     break;
                 default:
                     break;
@@ -322,7 +308,7 @@ internal sealed class PolarH10Session : IAsyncDisposable
         }
     }
 
-    private void HandleEcgFrame(PmdFrameHeader header, ReadOnlySpan<byte> payload, double arrival)
+    private void HandleEcgFrame(PmdFrameHeader header, ReadOnlySpan<byte> payload)
     {
         if (header.FrameType != EcgFrameDecoder.UncompressedFrameType)
         {
@@ -338,7 +324,6 @@ internal sealed class PolarH10Session : IAsyncDisposable
 
         var raw = ArrayPool<int>.Shared.Rent(count);
         var values = ArrayPool<float>.Shared.Rent(count);
-        var stamps = ArrayPool<double>.Shared.Rent(count);
         try
         {
             EcgFrameDecoder.Decode(payload, raw.AsSpan(0, count));
@@ -347,19 +332,17 @@ internal sealed class PolarH10Session : IAsyncDisposable
                 values[i] = raw[i];
             }
 
-            _ecgClock.Stamp(count, header.TimestampNanoseconds, arrival, stamps.AsSpan(0, count));
-            _ecgSink.PushChunk(values.AsSpan(0, count), stamps.AsSpan(0, count), count);
+            _ecgSink.PushChunk(values.AsSpan(0, count), count);
             EcgStatistics.RecordFrame(count);
         }
         finally
         {
             ArrayPool<int>.Shared.Return(raw);
             ArrayPool<float>.Shared.Return(values);
-            ArrayPool<double>.Shared.Return(stamps);
         }
     }
 
-    private void HandleAccFrame(PmdFrameHeader header, ReadOnlySpan<byte> payload, double arrival)
+    private void HandleAccFrame(PmdFrameHeader header, ReadOnlySpan<byte> payload)
     {
         int count;
         try
@@ -381,7 +364,6 @@ internal sealed class PolarH10Session : IAsyncDisposable
         var axes = count * AccFrameDecoder.Axes;
         var raw = ArrayPool<short>.Shared.Rent(axes);
         var values = ArrayPool<float>.Shared.Rent(axes);
-        var stamps = ArrayPool<double>.Shared.Rent(count);
         try
         {
             AccFrameDecoder.Decode(header.FrameType, payload, raw.AsSpan(0, axes));
@@ -390,15 +372,13 @@ internal sealed class PolarH10Session : IAsyncDisposable
                 values[i] = raw[i];
             }
 
-            _accClock.Stamp(count, header.TimestampNanoseconds, arrival, stamps.AsSpan(0, count));
-            _accSink.PushChunk(values.AsSpan(0, axes), stamps.AsSpan(0, count), count);
+            _accSink.PushChunk(values.AsSpan(0, axes), count);
             AccStatistics.RecordFrame(count);
         }
         finally
         {
             ArrayPool<short>.Shared.Return(raw);
             ArrayPool<float>.Shared.Return(values);
-            ArrayPool<double>.Shared.Return(stamps);
         }
     }
 

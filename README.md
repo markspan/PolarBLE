@@ -44,6 +44,12 @@ Every PMD frame carries the strap's own timestamp of its last sample. PolarBLE c
 
 ---
 
+## 🦀 Rust version
+
+A parallel implementation in Rust lives in [`rust/`](rust/README.md). It is a command-line tool that runs on Windows, Linux and macOS, produces the same LSL streams (including the same `source_id` for the same strap), and adds a `simulate` command that streams a synthetic strap through the full pipeline to test an LSL setup without hardware.
+
+---
+
 ## 💻 Requirements
 
 - Windows 10 (build 17763) or later
@@ -88,6 +94,7 @@ Or open `PolarBLE.sln` in Visual Studio 2022 and press F5.
 | `src/PolarBLE.App` | The WinForms user interface. |
 | `tests/PolarBLE.Core.Tests` | xUnit tests for the codec and the whole acquisition path. No hardware required. |
 | `third_party/liblsl` | Vendored, unmodified [liblsl](https://github.com/sccn/liblsl) C# binding and its native `lsl.dll`. |
+| `rust` | The Rust implementation; see [its README](rust/README.md). |
 
 The separation is deliberate. Core targets plain `net8.0`, with no WinRT and no WinForms, and every byte-level decoding rule is a pure function over a `ReadOnlySpan<byte>`. The whole path from a raw notification to the samples handed to LSL is therefore covered by tests, rather than by hoping a recording looks plausible. The app layer only moves bytes between WinRT and that pipeline.
 

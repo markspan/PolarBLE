@@ -1,0 +1,16 @@
+[package]
+name = "polarble-core"
+description = "Platform-free Polar PMD protocol codec and acquisition pipeline."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# Deliberately dependency-free: every byte-level rule in here is a pure function, testable
+# without a strap, a radio or liblsl.
+[dependencies]
+
+[lints]
+workspace = true

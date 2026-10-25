@@ -146,8 +146,10 @@ public static class AccFrameDecoder
             {
                 for (var axis = 0; axis < Axes; axis++)
                 {
-                    current[axis] = Math.Clamp(
-                        current[axis] + bits.ReadSigned(block.BitWidth),
+                    // Summed at 64 bits: a full-width 32-bit delta would otherwise wrap the int
+                    // before it is clamped and flip the sign of the result.
+                    current[axis] = (int)Math.Clamp(
+                        (long)current[axis] + bits.ReadSigned(block.BitWidth),
                         short.MinValue,
                         short.MaxValue);
                     destination[(written * Axes) + axis] = T.CreateTruncating(current[axis]);

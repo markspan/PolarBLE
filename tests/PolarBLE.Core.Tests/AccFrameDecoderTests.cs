@@ -171,4 +171,22 @@ public class AccFrameDecoderTests
 
         Assert.Equal([1f, -1f, 32767f], destination.ToArray());
     }
+
+    [Fact]
+    public void Delta_SaturatesInsteadOfWrappingOnAFullWidthDelta()
+    {
+        byte[] payload =
+        [
+            0xFF, 0x7F, 0x00, 0x00, 0x00, 0x00, // reference (32767, 0, 0)
+            0x20, 0x01,                         // one sample of 32-bit deltas
+            0xFF, 0xFF, 0xFF, 0x7F,             // x: +2^31 - 1
+            0x00, 0x00, 0x00, 0x00,             // y: 0
+            0x00, 0x00, 0x00, 0x00,             // z: 0
+        ];
+
+        Span<short> destination = new short[6];
+        AccFrameDecoder.Decode(AccFrameDecoder.DeltaFrameType, payload, destination);
+
+        Assert.Equal([short.MaxValue, 0, 0], destination[3..].ToArray());
+    }
 }

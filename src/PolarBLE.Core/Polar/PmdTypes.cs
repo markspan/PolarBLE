@@ -77,10 +77,10 @@ public enum PmdError : byte
     /// <summary>The measurement is already in the requested state.</summary>
     AlreadyInState = 0x06,
 
-    /// <summary>The requested setting combination is invalid.</summary>
+    /// <summary>The requested resolution is invalid.</summary>
     InvalidResolution = 0x07,
 
-    /// <summary>The sensor is not able to service the request right now.</summary>
+    /// <summary>The requested sample rate is invalid.</summary>
     InvalidSampleRate = 0x08,
 
     /// <summary>The requested range is invalid.</summary>
@@ -95,7 +95,7 @@ public enum PmdError : byte
     /// <summary>The sensor is in an invalid state for this request.</summary>
     InvalidState = 0x0C,
 
-    /// <summary>The device is in charger.</summary>
+    /// <summary>The sensor is charging and cannot measure.</summary>
     DeviceInCharger = 0x0D,
 }
 
@@ -115,4 +115,19 @@ public readonly record struct PmdControlPointResponse(
 {
     /// <summary>True when the sensor accepted the request.</summary>
     public bool IsSuccess => Error == PmdError.Success;
+
+    /// <summary>
+    /// Whether this response answers <paramref name="request"/>, judged by the operation code
+    /// and measurement type that every request starts with.
+    /// </summary>
+    /// <remarks>
+    /// Matching guards against attributing a late or unsolicited indication, for example the
+    /// answer to a previous request that already timed out, to the request now in flight.
+    /// </remarks>
+    /// <param name="request">The request bytes as written to the control point.</param>
+    /// <returns>True if the response belongs to the request.</returns>
+    public bool IsResponseTo(ReadOnlySpan<byte> request) =>
+        request.Length >= 2 &&
+        (byte)OpCode == request[0] &&
+        (byte)MeasurementType == request[1];
 }

@@ -68,4 +68,15 @@ public class EcgFrameDecoderTests
             EcgFrameDecoder.Decode(payload, tooSmall);
         });
     }
+
+    [Fact]
+    public void Decode_RepresentsEveryTwentyFourBitValueExactlyAsAFloat()
+    {
+        byte[] payload = [0x00, 0x00, 0x80, 0xFF, 0xFF, 0x7F];
+
+        Span<float> destination = new float[2];
+        EcgFrameDecoder.Decode(payload, destination);
+
+        Assert.Equal([-8388608f, 8388607f], destination.ToArray());
+    }
 }

@@ -1,26 +1,16 @@
 using System.Collections.Concurrent;
+using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
 
 namespace PolarBLE.App.Bluetooth;
 
-/// <summary>A Polar strap seen in a Bluetooth LE advertisement.</summary>
-/// <param name="Address">The Bluetooth address, which is the stable identity of the strap.</param>
-/// <param name="Name">The advertised local name.</param>
-internal sealed record DiscoveredDevice(ulong Address, string Name)
-{
-    /// <summary>The address formatted the way it is shown to users and used in stream ids.</summary>
-    public string AddressText => Address.ToString("X12");
-
-    /// <summary>
-    /// What the list box displays. The address travels with the object rather than being
-    /// parsed back out of this string, which is what the original implementation did.
-    /// </summary>
-    public override string ToString() => $"{Name} [{AddressText}]";
-}
-
 /// <summary>
 /// Watches for Polar advertisements and reports each distinct strap once.
 /// </summary>
+/// <remarks>
+/// At most one watcher exists at a time: starting a scan replaces the previous one and
+/// detaches its handlers, so nothing accumulates over repeated scans.
+/// </remarks>
 internal sealed class PolarScanner : IDisposable
 {
     private readonly ConcurrentDictionary<ulong, DiscoveredDevice> _seen = new();
@@ -30,14 +20,16 @@ internal sealed class PolarScanner : IDisposable
     /// <summary>Raised once per distinct strap, on a background thread.</summary>
     public event EventHandler<DiscoveredDevice>? DeviceDiscovered;
 
+    /// <summary>
+    /// Raised, on a background thread, when Windows ends a scan on its own, for example because
+    /// the Bluetooth radio is off. Carries the reason; it is not raised for <see cref="Stop"/>.
+    /// </summary>
+    public event EventHandler<BluetoothError>? ScanAborted;
+
     /// <summary>True while a scan is running.</summary>
     public bool IsScanning => _watcher is not null;
 
-    /// <summary>
-    /// Starts a scan, replacing any scan already in progress. The original implementation
-    /// created a fresh watcher on every click and never stopped the previous one, so handlers
-    /// and watchers accumulated for the lifetime of the process.
-    /// </summary>
+    /// <summary>Starts a scan, replacing any scan already in progress.</summary>
     public void Start()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -51,21 +43,22 @@ internal sealed class PolarScanner : IDisposable
         };
 
         watcher.Received += OnAdvertisementReceived;
+        watcher.Stopped += OnWatcherStopped;
         _watcher = watcher;
         watcher.Start();
     }
 
-    /// <summary>Stops the current scan, if any, and detaches its handler.</summary>
+    /// <summary>Stops the current scan, if any, and detaches its handlers.</summary>
     public void Stop()
     {
-        var watcher = _watcher;
+        var watcher = Interlocked.Exchange(ref _watcher, null);
         if (watcher is null)
         {
             return;
         }
 
-        _watcher = null;
         watcher.Received -= OnAdvertisementReceived;
+        watcher.Stopped -= OnWatcherStopped;
 
         try
         {
@@ -95,7 +88,7 @@ internal sealed class PolarScanner : IDisposable
     {
         var name = args.Advertisement.LocalName;
 
-        // Match any Polar strap, not just the H10: an empty local name carries no identity, so
+        // Match any Polar strap, not just the H10. An empty local name carries no identity, so
         // it is skipped rather than listed as a nameless entry.
         if (string.IsNullOrWhiteSpace(name) ||
             !name.StartsWith("Polar", StringComparison.OrdinalIgnoreCase))
@@ -107,6 +100,19 @@ internal sealed class PolarScanner : IDisposable
         if (_seen.TryAdd(args.BluetoothAddress, device))
         {
             DeviceDiscovered?.Invoke(this, device);
+        }
+    }
+
+    private void OnWatcherStopped(
+        BluetoothLEAdvertisementWatcher sender,
+        BluetoothLEAdvertisementWatcherStoppedEventArgs args)
+    {
+        // Only a watcher that is still current was stopped by Windows rather than by Stop().
+        if (Interlocked.CompareExchange(ref _watcher, null, sender) == sender)
+        {
+            sender.Received -= OnAdvertisementReceived;
+            sender.Stopped -= OnWatcherStopped;
+            ScanAborted?.Invoke(this, args.Error);
         }
     }
 }

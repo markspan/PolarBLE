@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace PolarBLE.Core.Polar;
 
 /// <summary>
@@ -5,7 +7,8 @@ namespace PolarBLE.Core.Polar;
 /// </summary>
 /// <remarks>
 /// Samples are 3-byte little-endian two's-complement integers. The value is already in
-/// microvolts; no scaling is applied.
+/// microvolts; no scaling is applied. Every 24-bit value is exactly representable in a
+/// <see cref="float"/>, so decoding straight into the LSL wire format loses nothing.
 /// </remarks>
 public static class EcgFrameDecoder
 {
@@ -15,10 +18,17 @@ public static class EcgFrameDecoder
     /// <summary>Bytes occupied by one ECG sample.</summary>
     public const int BytesPerSample = 3;
 
+    /// <summary>Number of channels in one ECG sample.</summary>
+    public const int Channels = 1;
+
+    /// <summary>Whether frames of the given type can be decoded.</summary>
+    /// <param name="frameType">The frame type byte from the header.</param>
+    /// <returns>True for <see cref="UncompressedFrameType"/>.</returns>
+    public static bool IsSupported(byte frameType) => frameType == UncompressedFrameType;
+
     /// <summary>
-    /// Number of whole samples in a payload. Any trailing partial sample is excluded; the
-    /// original implementation looped while offset was less than the payload length and so
-    /// read one or two bytes past the end of a ragged payload.
+    /// Number of whole samples in a payload. A trailing partial sample is excluded, so a
+    /// ragged payload can never cause a read past its end.
     /// </summary>
     /// <param name="payload">The frame payload, header already removed.</param>
     /// <returns>The count of complete samples.</returns>
@@ -27,13 +37,18 @@ public static class EcgFrameDecoder
     /// <summary>
     /// Decodes every complete sample in <paramref name="payload"/>.
     /// </summary>
+    /// <typeparam name="T">
+    /// The numeric type to decode into, typically <see cref="int"/> for analysis or
+    /// <see cref="float"/> for streaming.
+    /// </typeparam>
     /// <param name="payload">The frame payload, header already removed.</param>
     /// <param name="destination">Receives the decoded microvolt values.</param>
     /// <returns>The number of samples written.</returns>
     /// <exception cref="ArgumentException">
     /// <paramref name="destination"/> is too small to hold the decoded samples.
     /// </exception>
-    public static int Decode(ReadOnlySpan<byte> payload, Span<int> destination)
+    public static int Decode<T>(ReadOnlySpan<byte> payload, Span<T> destination)
+        where T : INumberBase<T>
     {
         var count = SampleCount(payload);
         if (destination.Length < count)
@@ -45,18 +60,18 @@ public static class EcgFrameDecoder
 
         for (var i = 0; i < count; i++)
         {
-            var offset = i * BytesPerSample;
-            var raw = payload[offset] | (payload[offset + 1] << 8) | (payload[offset + 2] << 16);
-
-            // Sign-extend from 24 to 32 bits.
-            if ((raw & 0x800000) != 0)
-            {
-                raw |= unchecked((int)0xFF000000);
-            }
-
-            destination[i] = raw;
+            destination[i] = T.CreateTruncating(ReadInt24(payload.Slice(i * BytesPerSample, BytesPerSample)));
         }
 
         return count;
+    }
+
+    /// <summary>Reads a little-endian 24-bit two's-complement integer.</summary>
+    private static int ReadInt24(ReadOnlySpan<byte> bytes)
+    {
+        var raw = bytes[0] | (bytes[1] << 8) | (bytes[2] << 16);
+
+        // Shift the sign bit into bit 31 and back to sign-extend from 24 to 32 bits.
+        return (raw << 8) >> 8;
     }
 }

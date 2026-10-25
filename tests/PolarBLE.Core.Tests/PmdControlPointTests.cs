@@ -74,4 +74,16 @@ public class PmdControlPointTests
     {
         Assert.False(PmdControlPoint.TryParseResponse(frame, out _));
     }
+
+    [Fact]
+    public void IsResponseTo_MatchesOnOpCodeAndMeasurementType()
+    {
+        var response = new PmdControlPointResponse(
+            PmdOpCode.StartMeasurement, PmdMeasurementType.Acc, PmdError.Success);
+
+        Assert.True(response.IsResponseTo(PolarH10Configuration.BuildAccStart()));
+        Assert.False(response.IsResponseTo(PolarH10Configuration.BuildEcgStart()));
+        Assert.False(response.IsResponseTo(PmdControlPoint.BuildStop(PmdMeasurementType.Acc)));
+        Assert.False(response.IsResponseTo([]));
+    }
 }

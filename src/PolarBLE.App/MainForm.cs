@@ -1,19 +1,36 @@
-using System.Globalization;
 using System.Reflection;
+using Windows.Devices.Bluetooth;
 using PolarBLE.App.Bluetooth;
+using PolarBLE.App.Presentation;
 
 namespace PolarBLE.App;
 
 /// <summary>
 /// The application window: find a strap, connect to it, and show that data is really flowing.
 /// </summary>
+/// <remarks>
+/// <para>
+/// The window is driven by one explicit <see cref="ConnectionState"/>. Every control's enabled
+/// state and caption is derived from it in <see cref="UpdateControls"/>, so no code path can
+/// leave, say, the connect button enabled halfway through a disconnect.
+/// </para>
+/// <para>
+/// Closing the window while a strap is connected, connecting or disconnecting defers the close
+/// until the strap has been sent its stop commands, otherwise it keeps streaming and draining
+/// its battery after the application has gone.
+/// </para>
+/// </remarks>
 internal sealed partial class MainForm : Form
 {
+    private static readonly Color HealthyTelemetryColor = SystemColors.GrayText;
+    private static readonly Color ProblemTelemetryColor = Color.Firebrick;
+
     private readonly PolarScanner _scanner = new();
 
+    private ConnectionState _state = ConnectionState.Idle;
     private PolarH10Session? _session;
     private CancellationTokenSource? _connectCancellation;
-    private bool _busy;
+    private bool _closeRequested;
 
     public MainForm()
     {
@@ -21,6 +38,16 @@ internal sealed partial class MainForm : Form
         LoadWindowIcon();
 
         _scanner.DeviceDiscovered += OnDeviceDiscovered;
+        _scanner.ScanAborted += OnScanAborted;
+        UpdateControls();
+    }
+
+    private enum ConnectionState
+    {
+        Idle,
+        Connecting,
+        Connected,
+        Disconnecting,
     }
 
     /// <summary>
@@ -30,21 +57,14 @@ internal sealed partial class MainForm : Form
     private static Font CreateMonospaceFont(float sizeInPoints)
     {
         string[] preferred = ["Consolas", "Cascadia Mono", "Courier New"];
-        foreach (var name in preferred)
-        {
-            foreach (var family in FontFamily.Families)
-            {
-                if (string.Equals(family.Name, name, StringComparison.OrdinalIgnoreCase))
-                {
-                    return new Font(name, sizeInPoints);
-                }
-            }
-        }
+        var installed = FontFamily.Families.Select(family => family.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        return new Font(FontFamily.GenericMonospace, sizeInPoints);
+        var name = preferred.FirstOrDefault(installed.Contains);
+        return name is null
+            ? new Font(FontFamily.GenericMonospace, sizeInPoints)
+            : new Font(name, sizeInPoints);
     }
-
-    private bool IsConnected => _session is not null;
 
     private void LoadWindowIcon()
     {
@@ -63,227 +83,265 @@ internal sealed partial class MainForm : Form
         }
     }
 
+    private void SetState(ConnectionState state)
+    {
+        _state = state;
+        UpdateControls();
+    }
+
+    /// <summary>Derives every control's enabled state and caption from the current state.</summary>
+    private void UpdateControls()
+    {
+        var hasSelection = listBoxDevices.SelectedItem is DiscoveredDevice;
+
+        btnScan.Enabled = _state is ConnectionState.Idle or ConnectionState.Connected;
+        btnScan.Text = _scanner.IsScanning ? "Stop &scanning" : "&Scan";
+
+        btnConnect.Enabled = _state switch
+        {
+            ConnectionState.Idle => hasSelection,
+            ConnectionState.Connected => true,
+            _ => false,
+        };
+        btnConnect.Text = _state is ConnectionState.Connected or ConnectionState.Disconnecting
+            ? "&Disconnect"
+            : "&Connect";
+    }
+
     private void BtnScan_Click(object? sender, EventArgs e)
     {
         if (_scanner.IsScanning)
         {
             _scanner.Stop();
-            btnScan.Text = "&Scan";
             SetStatus("Scan stopped.");
-            return;
+        }
+        else
+        {
+            StartScan();
         }
 
+        UpdateControls();
+    }
+
+    private void StartScan()
+    {
         listBoxDevices.Items.Clear();
-        btnConnect.Enabled = false;
 
         try
         {
             _scanner.Start();
-            btnScan.Text = "Stop &scanning";
             SetStatus("Scanning for Polar straps…");
         }
         catch (Exception ex)
         {
-            SetStatus($"Could not start scanning: {ex.Message}");
+            SetStatus($"Could not start scanning: {ex.Message}", isProblem: true);
         }
     }
 
     private void OnDeviceDiscovered(object? sender, DiscoveredDevice device) =>
         RunOnUi(() => listBoxDevices.Items.Add(device));
 
-    private void ListBoxDevices_SelectedIndexChanged(object? sender, EventArgs e) =>
-        btnConnect.Enabled = !_busy && (IsConnected || listBoxDevices.SelectedItem is DiscoveredDevice);
+    private void OnScanAborted(object? sender, BluetoothError error) => RunOnUi(() =>
+    {
+        SetStatus($"Scanning stopped by Windows ({error}). Check that Bluetooth is on.", isProblem: true);
+        UpdateControls();
+    });
+
+    private void ListBoxDevices_SelectedIndexChanged(object? sender, EventArgs e) => UpdateControls();
 
     private async void ListBoxDevices_DoubleClick(object? sender, EventArgs e)
     {
-        if (!IsConnected && !_busy && listBoxDevices.SelectedItem is DiscoveredDevice)
+        if (_state == ConnectionState.Idle && listBoxDevices.SelectedItem is DiscoveredDevice device)
         {
-            await ToggleConnectionAsync();
+            await ConnectAsync(device);
         }
     }
 
-    private async void BtnConnect_Click(object? sender, EventArgs e) => await ToggleConnectionAsync();
-
     /// <summary>
-    /// Connecting is an explicit action. The original code connected as a side effect of the
-    /// selection changing, so arrow-keying through the list fired connection attempts and a
-    /// second selection silently created a duplicate set of outlets.
+    /// Connecting is always an explicit action, never a side effect of the selection changing,
+    /// so arrow-keying through the list cannot fire connection attempts.
     /// </summary>
-    private async Task ToggleConnectionAsync()
+    private async void BtnConnect_Click(object? sender, EventArgs e)
     {
-        if (_busy)
+        switch (_state)
         {
-            return;
+            case ConnectionState.Idle when listBoxDevices.SelectedItem is DiscoveredDevice device:
+                await ConnectAsync(device);
+                break;
+            case ConnectionState.Connected:
+                await DisconnectAsync("Disconnected.");
+                break;
+            default:
+                break;
         }
+    }
 
-        if (IsConnected)
-        {
-            await DisconnectAsync();
-            return;
-        }
-
-        if (listBoxDevices.SelectedItem is not DiscoveredDevice device)
-        {
-            return;
-        }
-
-        _busy = true;
-        btnConnect.Enabled = false;
-        btnScan.Enabled = false;
+    private async Task ConnectAsync(DiscoveredDevice device)
+    {
+        SetState(ConnectionState.Connecting);
+        _scanner.Stop();
         SetStatus($"Connecting to {device.Name}… this can take up to a minute.");
 
         _connectCancellation = new CancellationTokenSource();
         try
         {
-            _scanner.Stop();
-            btnScan.Text = "&Scan";
-
             var session = await PolarH10Session.ConnectAsync(device, _connectCancellation.Token);
-
-            session.ConnectionLost += OnConnectionLost;
-            session.BatteryLevelChanged += OnBatteryLevelChanged;
-            session.StreamError += OnStreamError;
-            _session = session;
-
-            // The first battery reading happens during ConnectAsync, before this handler could
-            // possibly have been subscribed, so it would otherwise be lost until the strap next
-            // notifies a change (which, for a slowly-draining battery, can be a long wait).
-            if (session.BatteryPercent is { } percent)
-            {
-                batteryBar.Value = percent;
-            }
-
-            uiTimer.Start();
-
-            btnConnect.Text = "&Disconnect";
+            AttachSession(session);
+            SetState(ConnectionState.Connected);
             SetStatus($"Streaming from {session.DeviceName}.");
+
+            // A disconnect that happened before the handlers were attached raised no event.
+            if (!session.IsConnected)
+            {
+                await DisconnectAsync("The strap disconnected while connecting. Scan and try again.", isProblem: true);
+            }
         }
         catch (OperationCanceledException)
         {
+            SetState(ConnectionState.Idle);
             SetStatus("Connection cancelled.");
         }
         catch (PolarConnectionException ex)
         {
-            SetStatus($"Could not connect: {ex.Message}");
+            SetState(ConnectionState.Idle);
+            SetStatus($"Could not connect: {ex.Message}", isProblem: true);
         }
         catch (Exception ex)
         {
-            SetStatus($"Unexpected error while connecting: {ex.Message}");
+            SetState(ConnectionState.Idle);
+            SetStatus($"Unexpected error while connecting: {ex.Message}", isProblem: true);
         }
         finally
         {
-            _connectCancellation?.Dispose();
+            _connectCancellation.Dispose();
             _connectCancellation = null;
-            _busy = false;
-            btnScan.Enabled = true;
-            btnConnect.Enabled = IsConnected || listBoxDevices.SelectedItem is DiscoveredDevice;
         }
+
+        await CompletePendingCloseAsync();
     }
 
     /// <summary>
-    /// Guards itself against re-entry rather than relying on each caller to remember to: it is
-    /// reached from a button click, from a lost-connection notification and from the window
-    /// closing, and the strap's own stop commands make this a genuinely awaited operation, not
-    /// an instant one. Without the guard the button stayed enabled and labelled "Disconnect"
-    /// for that whole stretch — because <see cref="_session"/> is cleared up front, a second
-    /// click during it saw <see cref="IsConnected"/> already false and fell through to
-    /// <see cref="ToggleConnectionAsync"/>'s connect branch instead of being ignored.
+    /// Stops the strap and releases the session. Reached from the button, from a lost
+    /// connection and from the window closing; only the first caller does the work.
     /// </summary>
-    private async Task DisconnectAsync()
+    private async Task DisconnectAsync(string finalStatus, bool isProblem = false)
     {
-        if (_busy)
-        {
-            return;
-        }
-
         var session = _session;
-        if (session is null)
+        if (_state != ConnectionState.Connected || session is null)
         {
             return;
         }
 
-        _busy = true;
-        btnConnect.Enabled = false;
+        SetState(ConnectionState.Disconnecting);
+        SetStatus("Disconnecting…");
+        DetachSession(session);
+
+        await session.DisposeAsync();
+
+        SetState(ConnectionState.Idle);
+        SetStatus(finalStatus, isProblem);
+        await CompletePendingCloseAsync();
+    }
+
+    private void AttachSession(PolarH10Session session)
+    {
+        _session = session;
+        session.ConnectionLost += OnConnectionLost;
+        session.BatteryLevelChanged += OnBatteryLevelChanged;
+        session.StreamError += OnStreamError;
+
+        // The first battery reading arrived during ConnectAsync, before the handler existed.
+        batteryBar.Value = session.BatteryPercent ?? -1;
+        uiTimer.Start();
+        RefreshTelemetry();
+    }
+
+    private void DetachSession(PolarH10Session session)
+    {
         uiTimer.Stop();
+        session.ConnectionLost -= OnConnectionLost;
+        session.BatteryLevelChanged -= OnBatteryLevelChanged;
+        session.StreamError -= OnStreamError;
         _session = null;
 
-        try
-        {
-            session.ConnectionLost -= OnConnectionLost;
-            session.BatteryLevelChanged -= OnBatteryLevelChanged;
-            session.StreamError -= OnStreamError;
-
-            SetStatus("Disconnecting…");
-            await session.DisposeAsync();
-
-            batteryBar.Value = -1;
-            lblThroughput.Text = string.Empty;
-            btnConnect.Text = "&Connect";
-            SetStatus("Disconnected.");
-        }
-        finally
-        {
-            _busy = false;
-            btnConnect.Enabled = IsConnected || listBoxDevices.SelectedItem is DiscoveredDevice;
-        }
+        batteryBar.Value = -1;
+        lblThroughput.Text = string.Empty;
     }
 
     private void OnConnectionLost(object? sender, EventArgs e) => RunOnUi(async () =>
-    {
-        if (IsConnected)
-        {
-            await DisconnectAsync();
-            SetStatus("The strap disconnected. Scan and reconnect to resume recording.");
-        }
-    });
+        await DisconnectAsync("The strap disconnected. Scan and reconnect to resume recording.", isProblem: true));
 
     private void OnBatteryLevelChanged(object? sender, int percent) =>
         RunOnUi(() => batteryBar.Value = percent);
 
     private void OnStreamError(object? sender, Exception error) =>
-        RunOnUi(() => SetStatus($"Error while decoding a frame: {error.Message}"));
+        RunOnUi(() => SetStatus($"Error while decoding a frame: {error.Message}", isProblem: true));
 
     /// <summary>
-    /// The user interface refreshes on a timer rather than from the BLE callbacks. The original
-    /// code marshalled to the UI thread on every single notification just to animate an
-    /// ellipsis and to set a colour that never changed again.
+    /// The telemetry refreshes on a timer rather than from the Bluetooth callbacks, so the UI
+    /// thread is never marshalled to once per notification.
     /// </summary>
-    /// <remarks>
-    /// Both fields are padded to a fixed width, so the two rows never shift left or right as a
-    /// sample count picks up another digit over the course of a recording — only the digits
-    /// themselves change, never their position.
-    /// </remarks>
-    private void UiTimer_Tick(object? sender, EventArgs e)
+    private void UiTimer_Tick(object? sender, EventArgs e) => RefreshTelemetry();
+
+    private void RefreshTelemetry()
     {
-        var session = _session;
-        if (session is null)
+        if (_session is not { } session)
         {
             return;
         }
 
-        lblThroughput.Text = string.Create(
-            CultureInfo.CurrentCulture,
-            $"ECG {session.EcgStatistics.Samples,12:N0} samples\n" +
-            $"ACC {session.AccStatistics.Samples,12:N0} samples");
+        lblThroughput.Text = TelemetryText.Format(session.Streams, out var hasProblems);
+        lblThroughput.ForeColor = hasProblems ? ProblemTelemetryColor : HealthyTelemetryColor;
     }
 
     private async void MainForm_FormClosing(object? sender, FormClosingEventArgs e)
     {
-        _connectCancellation?.Cancel();
-        _scanner.Dispose();
-
-        if (IsConnected)
+        if (_state == ConnectionState.Idle)
         {
-            // Give the strap its stop commands before the window goes away, otherwise it keeps
-            // streaming and draining its battery.
-            e.Cancel = true;
-            await DisconnectAsync();
-            FormClosing -= MainForm_FormClosing;
-            Close();
+            _scanner.Dispose();
+            return;
+        }
+
+        // Defer: the close is completed by CompletePendingCloseAsync once the strap is idle.
+        e.Cancel = true;
+        _closeRequested = true;
+        _connectCancellation?.Cancel();
+
+        if (_state == ConnectionState.Connected)
+        {
+            await DisconnectAsync("Disconnected.");
         }
     }
 
-    private void SetStatus(string message) => lblStatus.Text = message;
+    /// <summary>Finishes a close that was deferred while the strap was still busy.</summary>
+    private async Task CompletePendingCloseAsync()
+    {
+        if (!_closeRequested)
+        {
+            return;
+        }
+
+        switch (_state)
+        {
+            case ConnectionState.Connected:
+                // The connection completed just before cancellation could stop it.
+                await DisconnectAsync("Disconnected.");
+                break;
+            case ConnectionState.Idle:
+                // Cleared first so that a second completion cannot queue a second close.
+                _closeRequested = false;
+                RunOnUi(Close);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void SetStatus(string message, bool isProblem = false)
+    {
+        lblStatus.Text = message;
+        lblStatus.ForeColor = isProblem ? ProblemTelemetryColor : SystemColors.ControlText;
+    }
 
     /// <summary>
     /// Marshals to the UI thread, tolerating the window being torn down underneath us.
@@ -303,5 +361,17 @@ internal sealed partial class MainForm : Form
         {
             // The handle was destroyed between the check and the call.
         }
+    }
+
+    /// <summary>
+    /// Marshals an asynchronous handler to the UI thread. It runs as an async void delegate on
+    /// purpose: a failure then reaches <see cref="Application.ThreadException"/> instead of
+    /// vanishing with a discarded task.
+    /// </summary>
+    private void RunOnUi(Func<Task> action)
+    {
+        // Typed explicitly: an async lambda would otherwise bind back to this overload.
+        Action handler = async () => await action();
+        RunOnUi(handler);
     }
 }

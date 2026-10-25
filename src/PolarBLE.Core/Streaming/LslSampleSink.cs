@@ -6,10 +6,10 @@ namespace PolarBLE.Core.Streaming;
 /// An <see cref="ISampleSink"/> backed by a LabStreamingLayer outlet.
 /// </summary>
 /// <remarks>
-/// Samples are pushed a whole frame at a time rather than one interop call per sample, which
-/// is the only change from letting liblsl time each push by default: no timestamp is supplied
-/// here either, so liblsl stamps the chunk at push time and derives every earlier sample in it
-/// from the stream's own declared sample rate, exactly as it would for a single-sample push.
+/// Samples are pushed a whole frame at a time, one interop call per Bluetooth notification.
+/// No timestamp is supplied, so liblsl stamps the chunk at push time and derives every earlier
+/// sample in it from the stream's declared sample rate. Pushing and disposing are serialised,
+/// so a notification arriving during teardown can never touch a released outlet.
 /// </remarks>
 public sealed class LslSampleSink : ISampleSink
 {
@@ -47,8 +47,17 @@ public sealed class LslSampleSink : ISampleSink
             channel_format_t.cf_float32,
             definition.SourceId);
 
-        DescribeChannels(_info, definition);
-        _outlet = new StreamOutlet(_info, OutletChunkSize, MaxBufferedSeconds);
+        try
+        {
+            DescribeChannels(_info, definition);
+            _outlet = new StreamOutlet(_info, OutletChunkSize, MaxBufferedSeconds);
+        }
+        catch
+        {
+            // The stream info is a native handle; nobody else can release it.
+            _info.Dispose();
+            throw;
+        }
     }
 
     /// <summary>The stream this sink advertises.</summary>
@@ -57,30 +66,41 @@ public sealed class LslSampleSink : ISampleSink
     /// <inheritdoc />
     public int ChannelCount { get; }
 
-    /// <inheritdoc />
-    public long SamplesPushed { get; private set; }
-
     /// <summary>True when at least one consumer is currently subscribed.</summary>
-    public bool HasConsumers => !_disposed && _outlet.have_consumers();
+    public bool HasConsumers
+    {
+        get
+        {
+            lock (_pushLock)
+            {
+                return !_disposed && _outlet.have_consumers();
+            }
+        }
+    }
 
     /// <inheritdoc />
     public void PushChunk(ReadOnlySpan<float> interleaved, int sampleCount)
     {
-        if (sampleCount <= 0 || _disposed)
+        if (sampleCount <= 0)
         {
             return;
         }
 
-        var values = sampleCount * ChannelCount;
-        if (interleaved.Length < values)
+        if (interleaved.Length < sampleCount * ChannelCount)
         {
             throw new ArgumentException("Sample buffer is shorter than the declared frame.", nameof(interleaved));
         }
 
         lock (_pushLock)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             // liblsl derives the element count from the array length, so the staging buffer
-            // must be sized exactly. Frame sizes are near-constant, so this reallocates once.
+            // must be sized exactly. ECG and uncompressed accelerometer frames have a constant
+            // size, so in practice this reallocates only when the frame type changes.
             if (_buffer is null || _buffer.GetLength(0) != sampleCount)
             {
                 _buffer = new float[sampleCount, ChannelCount];
@@ -97,7 +117,6 @@ public sealed class LslSampleSink : ISampleSink
             // No timestamp argument: liblsl stamps the chunk with the current time and derives
             // every earlier sample in it from the stream's declared sample rate.
             _outlet.push_chunk(_buffer);
-            SamplesPushed += sampleCount;
         }
     }
 
@@ -107,14 +126,14 @@ public sealed class LslSampleSink : ISampleSink
     /// </summary>
     public void Dispose()
     {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _disposed = true;
         lock (_pushLock)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
             _outlet.Dispose();
             _info.Dispose();
         }

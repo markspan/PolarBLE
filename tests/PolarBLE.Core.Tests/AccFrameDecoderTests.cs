@@ -120,4 +120,55 @@ public class AccFrameDecoderTests
             AccFrameDecoder.Decode(AccFrameDecoder.UncompressedFrameType, payload, tooSmall);
         });
     }
+
+    [Theory]
+    [InlineData(AccFrameDecoder.UncompressedFrameType, true)]
+    [InlineData(AccFrameDecoder.DeltaFrameType, true)]
+    [InlineData(0x00, false)]
+    [InlineData(0x7F, false)]
+    public void IsSupported_AcceptsOnlyTheKnownEncodings(byte frameType, bool expected)
+    {
+        Assert.Equal(expected, AccFrameDecoder.IsSupported(frameType));
+    }
+
+    [Fact]
+    public void Delta_StopsAtABlockWithAnImpossibleBitWidth()
+    {
+        byte[] payload =
+        [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // reference (0, 0, 0)
+            0x04, 0x01, 0x21, 0x03,             // valid block: deltas (1, 2, 3)
+            0x21, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, // 33-bit deltas cannot exist
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF,
+        ];
+
+        Assert.Equal(2, AccFrameDecoder.SampleCount(AccFrameDecoder.DeltaFrameType, payload));
+    }
+
+    [Fact]
+    public void Delta_ClampsTheRunningValueToTheSixteenBitRange()
+    {
+        byte[] payload =
+        [
+            0xFF, 0x7F, 0x00, 0x80, 0x00, 0x00, // reference (32767, -32768, 0)
+            0x04, 0x01, 0xF1, 0x00,             // deltas (+1, -1, 0)
+        ];
+
+        Span<short> destination = new short[6];
+        AccFrameDecoder.Decode(AccFrameDecoder.DeltaFrameType, payload, destination);
+
+        Assert.Equal([short.MaxValue, short.MinValue, 0], destination[3..].ToArray());
+    }
+
+    [Fact]
+    public void Decode_ProducesTheSameValuesAsFloats()
+    {
+        byte[] payload = [0x01, 0x00, 0xFF, 0xFF, 0xFF, 0x7F];
+
+        Span<float> destination = new float[3];
+        AccFrameDecoder.Decode(AccFrameDecoder.UncompressedFrameType, payload, destination);
+
+        Assert.Equal([1f, -1f, 32767f], destination.ToArray());
+    }
 }

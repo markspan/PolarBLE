@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using System.Globalization;
+using PolarBLE.Core.Acquisition;
 using PolarBLE.Core.Streaming;
 
 namespace PolarBLE.Core.Polar;
@@ -7,10 +10,8 @@ namespace PolarBLE.Core.Polar;
 /// definitions that describe the resulting data.
 /// </summary>
 /// <remarks>
-/// The byte sequences produced here are deliberately identical to the hand-written arrays in
-/// the original implementation, so the sensor is asked for exactly what it was asked for
-/// before. What changed is that the values are now named rather than described by comments
-/// that did not match the bytes.
+/// The byte sequences produced here are pinned by tests to the requests known to work against
+/// real hardware, so the strap is always asked for exactly the same thing.
 /// </remarks>
 public static class PolarH10Configuration
 {
@@ -26,12 +27,36 @@ public static class PolarH10Configuration
     /// <summary>Accelerometer resolution in bits.</summary>
     public const ushort AccResolutionBits = 16;
 
-    /// <summary>
-    /// Accelerometer range in g. Note that the original inline comments offered 2 or 4 as the
-    /// options in play while the bytes actually requested 8; 8 is what the sensor was really
-    /// being configured for, and that behaviour is preserved here.
-    /// </summary>
+    /// <summary>Accelerometer range in g.</summary>
     public const ushort AccRangeG = 8;
+
+    /// <summary>
+    /// Every measurement this application acquires from a strap, in the order they are started.
+    /// </summary>
+    /// <param name="deviceName">The strap's advertised name.</param>
+    /// <param name="deviceAddress">The strap's Bluetooth address, formatted as hex.</param>
+    /// <returns>The ECG and accelerometer configurations.</returns>
+    public static IReadOnlyList<MeasurementConfiguration> CreateMeasurements(
+        string deviceName,
+        string deviceAddress) =>
+    [
+        new MeasurementConfiguration
+        {
+            Label = "ECG",
+            DisplayName = "ECG",
+            StartCommand = [.. BuildEcgStart()],
+            Decoder = MeasurementDecoders.Ecg,
+            Stream = EcgStream(deviceName, deviceAddress),
+        },
+        new MeasurementConfiguration
+        {
+            Label = "ACC",
+            DisplayName = "accelerometer",
+            StartCommand = [.. BuildAccStart()],
+            Decoder = MeasurementDecoders.Acc,
+            Stream = AccStream(deviceName, deviceAddress),
+        },
+    ];
 
     /// <summary>Builds the ECG start-measurement request.</summary>
     /// <returns>The control-point bytes.</returns>
@@ -64,8 +89,8 @@ public static class PolarH10Configuration
         DeviceAddress = deviceAddress,
         Acquisition = new Dictionary<string, string>
         {
-            ["resolution_bits"] = EcgResolutionBits.ToString(),
-            ["sample_rate_hz"] = EcgSampleRateHz.ToString(),
+            ["resolution_bits"] = Format(EcgResolutionBits),
+            ["sample_rate_hz"] = Format(EcgSampleRateHz),
         },
     };
 
@@ -90,9 +115,12 @@ public static class PolarH10Configuration
         DeviceAddress = deviceAddress,
         Acquisition = new Dictionary<string, string>
         {
-            ["resolution_bits"] = AccResolutionBits.ToString(),
-            ["sample_rate_hz"] = AccSampleRateHz.ToString(),
-            ["range_g"] = AccRangeG.ToString(),
+            ["resolution_bits"] = Format(AccResolutionBits),
+            ["sample_rate_hz"] = Format(AccSampleRateHz),
+            ["range_g"] = Format(AccRangeG),
         },
     };
+
+    // Metadata is read by machines, so it must not vary with the user's locale.
+    private static string Format(ushort value) => value.ToString(CultureInfo.InvariantCulture);
 }

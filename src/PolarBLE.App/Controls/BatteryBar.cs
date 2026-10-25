@@ -3,16 +3,17 @@ using System.ComponentModel;
 namespace PolarBLE.App.Controls;
 
 /// <summary>
-/// A small battery gauge.
+/// A small battery gauge that can also show "not known yet".
 /// </summary>
 /// <remarks>
-/// Replaces the original TextProgressBar, which painted no background (leaving the unfilled
-/// region unpainted), ignored its own Maximum when formatting the caption, allocated brushes on
-/// every paint, and had no way to represent "not known yet".
+/// The fill turns amber below a quarter and red below a tenth: a flat colour tells the wearer
+/// nothing until it is too late to swap the strap.
 /// </remarks>
 internal sealed class BatteryBar : Control
 {
-    private int _value;
+    private const int Unknown = -1;
+
+    private int _value = Unknown;
     private int _maximum = 100;
 
     public BatteryBar()
@@ -23,23 +24,24 @@ internal sealed class BatteryBar : Control
             true);
 
         TabStop = false;
+        AccessibleDescription = DescribeValue();
     }
 
     /// <summary>Current level. Negative means "not known yet".</summary>
-    [DefaultValue(0)]
+    [DefaultValue(Unknown)]
     public int Value
     {
         get => _value;
         set
         {
-            var clamped = value < 0 ? -1 : Math.Min(value, _maximum);
+            var clamped = value < 0 ? Unknown : Math.Min(value, _maximum);
             if (clamped == _value)
             {
                 return;
             }
 
             _value = clamped;
-            AccessibleDescription = HasValue ? $"Battery {Percentage} percent" : "Battery level unknown";
+            AccessibleDescription = DescribeValue();
             Invalidate();
         }
     }
@@ -67,6 +69,9 @@ internal sealed class BatteryBar : Control
 
     private int Percentage => (int)Math.Round(_value * 100.0 / _maximum);
 
+    private string DescribeValue() =>
+        HasValue ? $"Battery {Percentage} percent" : "Battery level unknown";
+
     protected override void OnPaint(PaintEventArgs e)
     {
         ArgumentNullException.ThrowIfNull(e);
@@ -85,8 +90,6 @@ internal sealed class BatteryBar : Control
             var fillWidth = (int)(bounds.Width * (_value / (double)_maximum));
             if (fillWidth > 0)
             {
-                // Amber below a quarter, red below a tenth: a flat colour tells the wearer
-                // nothing until it is too late to swap the strap.
                 var colour = Percentage switch
                 {
                     < 10 => Color.Firebrick,
@@ -99,7 +102,7 @@ internal sealed class BatteryBar : Control
             }
         }
 
-        var caption = HasValue ? $"{Percentage}%" : "—";
+        var caption = HasValue ? $"{Percentage}%" : "--";
         TextRenderer.DrawText(
             graphics,
             caption,

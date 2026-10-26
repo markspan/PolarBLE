@@ -1,0 +1,16 @@
+[package]
+name = "polarble-lsl"
+description = "A minimal, runtime-loaded liblsl binding that implements the PolarBLE sample sink."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+libloading = "0.9"
+polarble-core.workspace = true
+
+[lints]
+workspace = true

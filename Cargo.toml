@@ -1,0 +1,30 @@
+# PolarBLE: a platform-free core, an LSL binding, and a thin Bluetooth front end.
+[workspace]
+resolver = "3"
+members = ["crates/polarble-core", "crates/polarble-lsl", "crates/polarble"]
+
+[workspace.package]
+version = "2.0.0"
+edition = "2024"
+rust-version = "1.88"
+license = "LGPL-2.1-only"
+authors = ["Mark Span"]
+repository = "https://github.com/markspan/PolarBLE"
+
+[workspace.dependencies]
+polarble-core = { path = "crates/polarble-core" }
+polarble-lsl = { path = "crates/polarble-lsl" }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unreachable_pub = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+module_name_repetitions = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

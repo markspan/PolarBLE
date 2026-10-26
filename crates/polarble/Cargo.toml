@@ -1,0 +1,22 @@
+[package]
+name = "polarble"
+description = "Streams Polar H10 ECG and accelerometer data to LabStreamingLayer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = "1"
+btleplug = "0.13"
+clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+polarble-core.workspace = true
+polarble-lsl.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+uuid = "1"
+
+[lints]
+workspace = true

@@ -1,0 +1,131 @@
+name: ci
+
+on:
+  push:
+    branches: [rust]
+  pull_request:
+    branches: [rust]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # btleplug talks to BlueZ over D-Bus on Linux.
+      - name: Install D-Bus headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      # The liblsl tests are ignored by default because they need the native library. On
+      # Windows they run against the exact lsl.dll this repository ships.
+      - name: Test against the shipped lsl.dll
+        if: runner.os == 'Windows'
+        env:
+          POLARBLE_LSL_LIBRARY: ${{ github.workspace }}\third_party\liblsl\lsl.dll
+        run: cargo test -p polarble-lsl --locked -- --include-ignored
+
+  liblsl-linux:
+    name: end to end against liblsl (Linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install D-Bus headers
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The pylsl wheel bundles a prebuilt liblsl for Linux.
+      - name: Install liblsl
+        run: |
+          python3 -m pip install pylsl
+          echo "POLARBLE_LSL_LIBRARY=$(python3 -c 'import os, pylsl; print(os.path.join(os.path.dirname(pylsl.__file__), "lib", "liblsl.so"))')" >> "$GITHUB_ENV"
+
+      - name: Test the binding
+        run: cargo test -p polarble-lsl --locked -- --include-ignored
+
+      # The simulator drives the whole pipeline, from encoded PMD frames to live outlets.
+      - name: Run the simulator
+        run: cargo run --locked -- simulate --duration 3 --interval 1
+
+  msrv:
+    name: minimum supported Rust version
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.88
+
+      - name: Install D-Bus headers
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Check
+        run: cargo check --workspace --all-targets --locked
+
+  package:
+    name: package (Windows)
+    needs: check
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      # polarble.exe finds lsl.dll next to itself, so the two ship together.
+      - name: Zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item target/release/polarble.exe package/
+          Copy-Item third_party/liblsl/lsl.dll package/
+          Compress-Archive -Path package/* -DestinationPath PolarBLE-rust-windows.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PolarBLE-rust-windows
+          path: PolarBLE-rust-windows.zip
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: PolarBLE-rust-windows.zip
